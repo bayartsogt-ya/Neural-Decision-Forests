@@ -90,7 +90,7 @@ class MoA(Dataset):
         
 
         X = torch.from_numpy(X).type(torch.FloatTensor)
-        y = torch.from_numpy(y).type(torch.IntTensor)
+        y = torch.from_numpy(y).type(torch.FloatTensor)
         return X,y
 
 
