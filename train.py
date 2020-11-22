@@ -3,7 +3,7 @@ import logging
 
 import torch
 import torch.nn.functional as F
-import torchvision
+# import torchvision
 from torch.autograd import Variable
 
 import dataset
@@ -16,7 +16,7 @@ def parse_arg():
         format="[%(asctime)s]: %(levelname)s: %(message)s"
     )
     parser = argparse.ArgumentParser(description='train.py')
-    parser.add_argument('-dataset', choices=['mnist', 'adult', 'letter', 'yeast'], default='mnist')
+    parser.add_argument('-dataset', choices=['mnist', 'adult', 'letter', 'yeast', 'moa'], default='moa')
     parser.add_argument('-batch_size', type=int, default=128)
 
     parser.add_argument('-feat_dropout', type=float, default=0.3)
@@ -31,6 +31,7 @@ def parse_arg():
     parser.add_argument('-jointly_training', action='store_true', default=False)
     parser.add_argument('-epochs', type=int, default=10)
     parser.add_argument('-report_every', type=int, default=10)
+    parser.add_argument('-n_folds', type=int, default=5)
 
     opt = parser.parse_args()
     return opt
@@ -39,7 +40,12 @@ def parse_arg():
 def prepare_db(opt):
     print("Use %s dataset" % (opt.dataset))
 
-    if opt.dataset == 'mnist':
+    if opt.dataset == 'moa':
+        train_dataset = dataset.MoA('./data/lish-moa', train=True)
+        eval_dataset = dataset.MoA('./data/lish-moa', train=False)
+        return {'train': train_dataset, 'eval': eval_dataset}
+
+    elif opt.dataset == 'mnist':
         train_dataset = torchvision.datasets.MNIST('./data/mnist', train=True, download=True,
                                                    transform=torchvision.transforms.Compose([
                                                        torchvision.transforms.ToTensor(),
@@ -101,26 +107,28 @@ def prepare_optim(model, opt):
     return torch.optim.Adam(params, lr=opt.lr, weight_decay=1e-5)
 
 
-def train(model, optim, db, opt):
+def train(model, optim, lossfn, db, opt):
     for epoch in range(1, opt.epochs + 1):
         # Update \Pi
         if not opt.jointly_training:
             print("Epoch %d : Two Stage Learing - Update PI" % (epoch))
-            # prepare feats
-            cls_onehot = torch.eye(opt.n_class)
+            # # prepare feats
+            # cls_onehot = torch.eye(opt.n_class)
             feat_batches = []
             target_batches = []
             train_loader = torch.utils.data.DataLoader(db['train'], batch_size=opt.batch_size, shuffle=True)
             with torch.no_grad():
                 for batch_idx, (data, target) in enumerate(train_loader):
                     if opt.cuda:
-                        data, target, cls_onehot = data.cuda(), target.cuda(), cls_onehot.cuda()
+                        # data, target, cls_onehot = data.cuda(), target.cuda(), cls_onehot.cuda()
+                        data, target = data.cuda(), target.cuda()
                     data = Variable(data)
                     # Get feats
                     feats = model.feature_layer(data)
                     feats = feats.view(feats.size()[0], -1)
                     feat_batches.append(feats)
-                    target_batches.append(cls_onehot[target])
+                    # target_batches.append(cls_onehot[target])
+                    target_batches.append(target)
 
                 # Update \Pi for each tree
                 for tree in model.forest.trees:
@@ -165,7 +173,7 @@ def train(model, optim, db, opt):
             data, target = Variable(data), Variable(target)
             optim.zero_grad()
             output = model(data)
-            loss = F.nll_loss(torch.log(output), target)
+            loss = lossfn(output, target)
             loss.backward()
             # torch.nn.utils.clip_grad_norm([ p for p in model.parameters() if p.requires_grad],
             #                              max_norm=5)
@@ -186,7 +194,7 @@ def train(model, optim, db, opt):
                     data, target = data.cuda(), target.cuda()
                 data, target = Variable(data), Variable(target)
                 output = model(data)
-                test_loss += F.nll_loss(torch.log(output), target, size_average=False).item()  # sum up batch loss
+                test_loss += lossfn(output, target).item()  # sum up batch loss
                 pred = output.data.max(1, keepdim=True)[1]  # get the index of the max log-probability
                 correct += pred.eq(target.data.view_as(pred)).cpu().sum()
 
@@ -206,10 +214,11 @@ def main():
     else:
         print("WARNING: RUN WITHOUT GPU")
 
+    lossfn = torch.nn.BCEWithLogitsLoss()
     db = prepare_db(opt)
     model = prepare_model(opt)
     optim = prepare_optim(model, opt)
-    train(model, optim, db, opt)
+    train(model, optim, lossfn, db, opt)
 
 
 if __name__ == '__main__':

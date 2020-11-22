@@ -2,7 +2,97 @@ import torch
 from torch.utils.data import Dataset
 import os
 import numpy as np
+import pandas as pd
+
 from sklearn.model_selection import train_test_split
+from iterstrat.ml_stratifiers import MultilabelStratifiedKFold
+
+class MoA(Dataset):
+    def __init__(self,root,train=True, n_folds=5, fold=0):
+        super(MoA,self).__init__()
+        self.root = os.path.expanduser(root)
+        self.train = train
+        self.n_folds = n_folds
+        self.fold = fold
+        self.X, self.y = self.load_data()
+
+    def __getitem__(self, index):
+        return (self.X[index],self.y[index])
+
+    def __len__(self):
+        return len(self.X)
+
+    def load_data(self):
+        df_train_features          = pd.read_csv(f'{self.root}/train_features.csv')
+        df_train_targets_scored    = pd.read_csv(f'{self.root}/train_targets_scored.csv')
+        # df_train_targets_nonscored = pd.read_csv(f'{self.root}/train_targets_nonscored.csv')
+        df_train_drug              = pd.read_csv(f'{self.root}/train_drug.csv')
+        # df_test_features           = pd.read_csv(f'{self.root}/test_features.csv')
+        # df_sample_submission       = pd.read_csv(f'{self.root}/sample_submission.csv')
+
+        col_genes   = [col for col in df_train_features.columns.to_list() if col[:2] == "g-"]
+        col_cells   = [col for col in df_train_features.columns.to_list() if col[:2] == "c-"]
+        col_cats    = ["cp_time", "cp_dose"]
+
+        col_targets = df_train_targets_scored.columns.to_list()[1:]
+
+
+        df_train = df_train_features.merge(df_train_targets_scored, how="left", on="sig_id")
+        df_train = df_train.merge(df_train_drug, on="sig_id", how="left")
+        df_train = df_train.dropna()
+
+        ### FOLD 
+        seed = 42
+
+        vc = df_train.drug_id.value_counts()
+        vc1 = vc.loc[vc<=18].index.sort_values()
+        vc2 = vc.loc[vc>18].index.sort_values()
+
+        # STRATIFY DRUGS 18X OR LESS
+        dct1 = {}; dct2 = {}
+        skf = MultilabelStratifiedKFold(n_splits=self.n_folds, shuffle=True, random_state=seed)
+        tmp = df_train.groupby('drug_id')[col_targets].mean().loc[vc1]
+        for fold,(idxT,idxV) in enumerate( skf.split(tmp,tmp[col_targets])):
+            dd = {k:fold for k in tmp.index[idxV].values}
+            dct1.update(dd)
+
+        # STRATIFY DRUGS MORE THAN 18X
+        skf = MultilabelStratifiedKFold(n_splits=self.n_folds, shuffle=True, random_state=seed)
+        tmp = df_train.loc[df_train.drug_id.isin(vc2)].reset_index(drop=True)
+        for fold,(idxT,idxV) in enumerate( skf.split(tmp,tmp[col_targets])):
+            dd = {k:fold for k in tmp.sig_id[idxV].values}
+            dct2.update(dd)
+
+        # ASSIGN FOLDS
+        df_train['fold'] = df_train.drug_id.map(dct1)
+        df_train.loc[df_train.fold.isna(),'fold'] =\
+            df_train.loc[df_train.fold.isna(),'sig_id'].map(dct2)
+        df_train.fold = df_train.fold.astype('int8')
+
+        # EXCLUDE CONTROL GROUP
+        df_train = df_train.loc[df_train.cp_type=="trt_cp"]
+        df_train = df_train.reset_index(drop=True)
+
+        # convert categorical data
+        df_train.loc[:, 'cp_dose'] = df_train.loc[:, 'cp_dose'].map({'D1': 0, 'D2': 1})
+
+        # getting all input columns
+        col_input = col_cats + col_cells + col_genes
+
+        if self.train:
+            train_df = df_train[df_train['fold'] != self.fold].reset_index(drop=True)
+            X, y  = train_df[col_input].values, train_df[col_targets].values
+
+
+        else:
+            valid_df = df_train[df_train['fold'] == self.fold].reset_index(drop=True)
+            X, y =  valid_df[col_input].values, valid_df[col_targets].values
+        
+
+        X = torch.from_numpy(X).type(torch.FloatTensor)
+        y = torch.from_numpy(y).type(torch.IntTensor)
+        return X,y
+
 
 class UCIAdult(Dataset):
     def __init__(self,root,train=True):
