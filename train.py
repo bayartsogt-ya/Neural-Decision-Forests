@@ -80,6 +80,8 @@ def prepare_db(opt):
 def prepare_model(opt):
     if opt.dataset == 'mnist':
         feat_layer = ndf.MNISTFeatureLayer(opt.feat_dropout)
+    elif opt.dataset == 'moa':
+        feat_layer = ndf.MoAFeatureLayer(opt.feat_dropout)
     elif opt.dataset == 'adult':
         feat_layer = ndf.UCIAdultFeatureLayer(opt.feat_dropout)
     elif opt.dataset == 'letter':

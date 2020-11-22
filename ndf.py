@@ -33,6 +33,18 @@ class MNISTFeatureLayer(nn.Sequential):
         else:
             return 128*3*3
 
+class MoAFeatureLayer(nn.Sequential):
+    def __init__(self,dropout_rate=0.,shallow=True):
+        super(MoAFeatureLayer, self).__init__()
+        self.shallow = shallow
+        if shallow:
+            self.add_module('linear', nn.Linear(874, 1024))
+        else:
+            raise  NotImplementedError
+
+    def get_out_feature_size(self):
+        return 1024
+        
 class UCIAdultFeatureLayer(nn.Sequential):
     def __init__(self,dropout_rate=0.,shallow=True):
         super(UCIAdultFeatureLayer, self).__init__()
